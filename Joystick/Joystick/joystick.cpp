@@ -6,6 +6,10 @@
 //
 // Copyright (c) Microsoft Corporation. All rights reserved.
 //-----------------------------------------------------------------------------
+
+/*
+ * Changed by: Kaifei Chen <kaifei@cs.berkeley.edu>
+ */
 #define STRICT
 #define DIRECTINPUT_VERSION 0x0800
 #define _CRT_SECURE_NO_DEPRECATE
@@ -13,11 +17,17 @@
 #define _WIN32_DCOM
 #endif
 
+#define SERVER "127.0.0.1"  //ip address of udp server
+#define BUFLEN (64 + 128)  //Max length of buffer
+#define PORT 6543   //The port on which to listen for incoming data
+
 #include <windows.h>
 #include <stdio.h>
 #include <tchar.h>
 #include <commctrl.h>
 #include <basetsd.h>
+
+#include <list>
 
 #pragma warning(push)
 #pragma warning(disable:6000 28251)
@@ -42,6 +52,8 @@ BOOL CALLBACK    EnumJoysticksCallback( const DIDEVICEINSTANCE* pdidInstance, VO
 HRESULT InitDirectInput( HWND hDlg );
 VOID FreeDirectInput();
 HRESULT UpdateInputState( HWND hDlg );
+void sendUpdate(std::list<LONG> longData, std::list<DWORD> dwordData, std::list<BYTE> byteData);
+void printDebugString(LPCWSTR name, LPCWSTR value);
 
 // Stuff to filter out XInput devices
 #include <wbemidl.h>
@@ -565,7 +577,9 @@ BOOL CALLBACK EnumObjectsCallback( const DIDEVICEOBJECTINSTANCE* pdidoi,
 
 
 
-
+static std::list<LONG> lastLongData;
+static std::list<DWORD> lastDwordData;
+static std::list<BYTE> lastByteData;
 //-----------------------------------------------------------------------------
 // Name: UpdateInputState()
 // Desc: Get the input device's state and display it.
@@ -601,52 +615,75 @@ HRESULT UpdateInputState( HWND hDlg )
     if( FAILED( hr = g_pJoystick->GetDeviceState( sizeof( DIJOYSTATE2 ), &js ) ) )
         return hr; // The device should have been acquired during the Poll()
 
-    // Display joystick state to dialog
+    std::list<LONG> curLongData = { js.lX, js.lY, js.lZ, js.lRx, js.lRy, js.lRz, js.rglSlider[0], js.rglSlider[1] };
+    std::list<DWORD> curDwordData = { js.rgdwPOV[0], js.rgdwPOV[1], js.rgdwPOV[2], js.rgdwPOV[3] };
+    std::list<BYTE> curByteData;
 
     // Axes
     _stprintf_s( strText, 512, TEXT( "%ld" ), js.lX );
     SetWindowText( GetDlgItem( hDlg, IDC_X_AXIS ), strText );
+    printDebugString(L" js.lX", strText);
     _stprintf_s( strText, 512, TEXT( "%ld" ), js.lY );
     SetWindowText( GetDlgItem( hDlg, IDC_Y_AXIS ), strText );
+    printDebugString(L" js.lY", strText);
     _stprintf_s( strText, 512, TEXT( "%ld" ), js.lZ );
     SetWindowText( GetDlgItem( hDlg, IDC_Z_AXIS ), strText );
+    printDebugString(L" js.lZ", strText);
     _stprintf_s( strText, 512, TEXT( "%ld" ), js.lRx );
     SetWindowText( GetDlgItem( hDlg, IDC_X_ROT ), strText );
+    printDebugString(L" js.lRx", strText);
     _stprintf_s( strText, 512, TEXT( "%ld" ), js.lRy );
     SetWindowText( GetDlgItem( hDlg, IDC_Y_ROT ), strText );
+    printDebugString(L" js.lRy", strText);
     _stprintf_s( strText, 512, TEXT( "%ld" ), js.lRz );
     SetWindowText( GetDlgItem( hDlg, IDC_Z_ROT ), strText );
+    printDebugString(L" js.lRz", strText);
 
     // Slider controls
     _stprintf_s( strText, 512, TEXT( "%ld" ), js.rglSlider[0] );
     SetWindowText( GetDlgItem( hDlg, IDC_SLIDER0 ), strText );
+    printDebugString(L" js.rglSlider[0]", strText);
     _stprintf_s( strText, 512, TEXT( "%ld" ), js.rglSlider[1] );
     SetWindowText( GetDlgItem( hDlg, IDC_SLIDER1 ), strText );
+    printDebugString(L" js.rglSlider[1]", strText);
 
     // Points of view
     _stprintf_s( strText, 512, TEXT( "%lu" ), js.rgdwPOV[0] );
     SetWindowText( GetDlgItem( hDlg, IDC_POV0 ), strText );
+    printDebugString(L" js.rgdwPOV[0]", strText);
     _stprintf_s( strText, 512, TEXT( "%lu" ), js.rgdwPOV[1] );
     SetWindowText( GetDlgItem( hDlg, IDC_POV1 ), strText );
+    printDebugString(L" js.rgdwPOV[1]", strText);
     _stprintf_s( strText, 512, TEXT( "%lu" ), js.rgdwPOV[2] );
     SetWindowText( GetDlgItem( hDlg, IDC_POV2 ), strText );
+    printDebugString(L" js.rgdwPOV[2]", strText);
     _stprintf_s( strText, 512, TEXT( "%lu" ), js.rgdwPOV[3] );
     SetWindowText( GetDlgItem( hDlg, IDC_POV3 ), strText );
-
+    printDebugString(L" js.rgdwPOV[3]", strText);
 
     // Fill up text with which buttons are pressed
     _tcscpy_s( strText, 512, TEXT( "" ) );
-    for( int i = 0; i < 128; i++ )
+    for( BYTE i = 0; i < 128; i++ )
     {
         if( js.rgbButtons[i] & 0x80 )
         {
             TCHAR sz[128];
             _stprintf_s( sz, 128, TEXT( "%02d " ), i );
             _tcscat_s( strText, 512, sz );
+
+            curByteData.push_back(i);
         }
     }
 
     SetWindowText( GetDlgItem( hDlg, IDC_BUTTONS ), strText );
+    printDebugString(L" js.rgbButtons[x]", strText);
+
+    if (curLongData != lastLongData || curDwordData != lastDwordData || curByteData != lastByteData) {
+        sendUpdate(curLongData, curDwordData, curByteData);
+    }
+    lastLongData = curLongData;
+    lastDwordData = curDwordData;
+    lastByteData = curByteData;
 
     return S_OK;
 }
@@ -671,4 +708,79 @@ VOID FreeDirectInput()
 }
 
 
+//-----------------------------------------------------------------------------
+// Name: printDebugString()
+// Desc: Print name and value to output
+//-----------------------------------------------------------------------------
+void printDebugString(LPCWSTR name, LPCWSTR value) {
+    //OutputDebugString(name);
+    //OutputDebugString(L": ");
+    //OutputDebugString(value);
+    //OutputDebugString(L"\n");
+}
 
+//-----------------------------------------------------------------------------
+// Name: sendUpdate()
+// Desc: Send all control value to the controlling process through UDP.
+// source code: http://www.binarytides.com/udp-socket-programming-in-winsock/
+//-----------------------------------------------------------------------------
+void sendUpdate(std::list<LONG> longData, std::list<DWORD> dwordData, std::list<BYTE> byteData) {
+    struct sockaddr_in si_other;
+    int s, slen = sizeof(si_other);
+    char msg[BUFLEN];
+    WSADATA wsa;
+
+    //Initialise winsock
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+    {
+        exit(EXIT_FAILURE);
+    }
+
+    //create socket
+    if ((s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == SOCKET_ERROR)
+    {
+        exit(EXIT_FAILURE);
+    }
+
+    //setup address structure
+    memset((char *)&si_other, 0, sizeof(si_other));
+    si_other.sin_family = AF_INET;
+    si_other.sin_port = htons(PORT);
+    si_other.sin_addr.S_un.S_addr = inet_addr(SERVER);
+
+    //copy codes
+    // data structure : lX, lY, lZ, lRx, lRy, lRz, rglSlider0, rglSlider1, rgdwPOV0, rgdwPOV1, rgdwPOV2, rgdwPOV3, button numbers...
+    // First 8 values are long, following 4 values are unsigned long, following are byte array of pressed button
+    int idx = 0;
+    for (LONG data : longData) {
+        memcpy(msg + idx, &data, sizeof(LONG));
+        idx += sizeof(LONG);
+    }
+    for (DWORD data : dwordData) {
+        memcpy(msg + idx, &data, sizeof(DWORD));
+        idx += sizeof(DWORD);
+    }
+    for (BYTE data : byteData) {
+        memcpy(msg + idx, &data, sizeof(BYTE));
+        idx += sizeof(BYTE);
+    }
+
+    //send the message
+    if (sendto(s, msg, idx, 0, (struct sockaddr *) &si_other, slen) == SOCKET_ERROR)
+    {
+        // printf("sendto() failed with error code : %d", WSAGetLastError());
+        exit(EXIT_FAILURE);
+    }
+
+    //receive a reply and print it
+    //clear the buffer by filling null, it might have previously received data
+    // memset(buf, '\0', BUFLEN);
+    //try to receive some data, this is a blocking call
+    //if (recvfrom(s, buf, BUFLEN, 0, (struct sockaddr *) &si_other, &slen) == SOCKET_ERROR)
+    //{
+    //    exit(EXIT_FAILURE);
+    //}
+
+    closesocket(s);
+    WSACleanup();
+}
